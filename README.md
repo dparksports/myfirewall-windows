@@ -6,6 +6,8 @@
 
 **Ultra-low latency Windows network isolation & process security suite.**
 
+> ⚠️ **Deprecated — use Shields Up for Windows instead.** MyFirewall is no longer maintained. For ongoing Windows protection, use [**Shields Up**](https://github.com/dparksports/shields-up) (same author): one-click firewall presets, telemetry opt-outs, and OS hardening — every action reversible. [Download the latest release here](https://github.com/dparksports/shields-up/releases/latest).
+
 MyFirewall watches the Windows kernel directly — every process start and every TCP/IP event streams through ETW in real time — and turns what it sees into enforced Windows Firewall rules through the native `INetFwPolicy2` COM API. No PowerShell child processes, no drivers to install, no cloud dependency in the enforcement path. It ships as two frontends over one engine: a **Spectre.Console CLI dashboard** and a **WPF dark-mode desktop control center**, both self-contained .NET 10 binaries for Windows 10/11 x64.
 
 - **[Features](#-features)** · **[Default security posture](#-default-security-posture)** · **[Policy files](#-policy-files)** · **[CLI TUI](#%EF%B8%8F-cli-tui)** · **[Build](#-build--installation)** · **[Architecture](#-architecture)**
