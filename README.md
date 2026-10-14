@@ -1,172 +1,154 @@
-<p align="center">
-  <img src="assets/infographic.png" alt="MyFirewall — Windows network isolation & process security suite" width="100%">
-</p>
+> ⚠️ **MyFirewall is deprecated — use Shields Up for Windows instead.** This repository (MyFirewall) is no longer maintained. Shields Up, from the same author, is where the work continues: one-click firewall presets, telemetry opt-outs, and OS hardening — every action reversible. **[Download the latest Shields Up release here](https://github.com/dparksports/shields-up/releases/latest).**
 
-# 🛡️ MyFirewall
+# Shields Up
 
-**Ultra-low latency Windows network isolation & process security suite.**
+![Shields Up](docs/img/hero.png)
 
-> ⚠️ **Deprecated — use Shields Up for Windows instead.** MyFirewall is no longer maintained. For ongoing Windows protection, use [**Shields Up**](https://github.com/dparksports/shields-up) (same author): one-click firewall presets, telemetry opt-outs, and OS hardening — every action reversible. [Download the latest release here](https://github.com/dparksports/shields-up/releases/latest).
+## Sound familiar?
 
-MyFirewall watches the Windows kernel directly — every process start and every TCP/IP event streams through ETW in real time — and turns what it sees into enforced Windows Firewall rules through the native `INetFwPolicy2` COM API. No PowerShell child processes, no drivers to install, no cloud dependency in the enforcement path. It ships as two frontends over one engine: a **Spectre.Console CLI dashboard** and a **WPF dark-mode desktop control center**, both self-contained .NET 10 binaries for Windows 10/11 x64.
+You reinstall Windows 11. Before you've installed a single thing yourself, the Start
+menu is full of games and apps you never asked for. Half the settings you remember
+turning off are back on. And the machine you just spent an afternoon cleaning up is
+quietly checking in with servers you've never heard of.
 
-- **[Features](#-features)** · **[Default security posture](#-default-security-posture)** · **[Policy files](#-policy-files)** · **[CLI TUI](#%EF%B8%8F-cli-tui)** · **[Build](#-build--installation)** · **[Architecture](#-architecture)**
+The fix was never hard — it was just *long*: uninstall this, disable that, dig through
+firewall rules you can't tell apart, and do it all again after the next reinstall.
 
----
+**Shields Up is that afternoon, pressed into a button.**
 
-## ✨ Features
+## Four buttons, one clean machine
 
-### ⚡ Real-time kernel event tracing (ETW)
-- Captures `ProcessStart` and per-PID TCP/IP byte counters via a kernel `TraceEventSession`.
-- **Zero-escape enforcement** — a firewall rule is applied the millisecond a target executable spawns, before its packets reach the adapter.
-- IPv4 **and** IPv6 TCP tables read through `iphlpapi` with socket-to-PID correlation and ghost-socket tracking during teardown.
+**🧹 Take the junk out.** Uninstall the preinstalled apps — games, trial apps, the
+ones that came back with the update. You approve the list, you can edit it, and
+nothing Windows needs to run is ever on it.
 
-### 🧱 Native COM firewall engine
-- Direct `HNetCfg.FwPolicy2` / `HNetCfg.FWRule` interop — rule add/remove/enumerate without spawning `powershell.exe`.
-- IP blocks are created as four rules each (TCP/UDP × inbound/outbound); whole-application blocks resolve UWP **Package Family Names** and use native `LocalAppPackageId` isolation for system apps such as `StartMenuExperienceHost`.
-- **AutoEnforce loop** — any new destination IP contacted by a blocked process is firewall-blocked instantly and its live sockets reset via `SetTcpEntry`.
-- **App-level escalation** — the moment a process name is blocked, an ANY-protocol application rule is applied, so *every* destination (new IPs, UDP included) is blocked by the firewall itself; per-IP chasing becomes a safety net.
-- **Event-driven enforcement** — ETW `TcpIpConnect` / `UdpIpSend` events fire enforcement in milliseconds (not on the next 2s scan), catching send-and-die beacons whose sockets never appear in a snapshot; a PID→image map keeps attribution alive after the process exits.
-- **Reconciliation sweep** — every ~30s the app re-asserts blocked processes' app-level rules, repairing anything deleted by other tools.
+**🛡 Set the firewall without becoming an expert.** You don't have to know which rule
+is which — a one-click preset decides what stays open and what closes, and if
+anything you need stops working, one button (**Restore Internet**) puts it all back.
 
-### 🖥️ Two frontends, one engine
-- **CLI dashboard** — cursor-driven live tables with tabs, filtering, overlay modals, and a color-coded alert log.
-- **Desktop control center** — WPF dark dashboard with real-time search, smart-diff updates (no grid flicker), process ancestry, Authenticode signature status, and one-click hardening toggles.
+**🚪 Close the doors Windows leaves open.** A stock Windows machine ships with
+built-in remote-access plumbing most people will never use — VPN backdoors, hidden
+hotspot adapters, kernel-debug hooks. Shields Up shows each one as a green ✓ or an
+amber warning and closes them for good. And when you open Shields Up again later, it
+**re-checks every door and tells you what crept back** after an update.
 
-### 🔍 Process intelligence
-- Executable path resolution, parent process trees, and digital-signature verdicts for every connection.
-- GeoIP + reverse-DNS enrichment with caching and throttling.
-- Proactive WebView2 spawn analysis — every `msedgewebview2.exe` launch is attributed to its parent (Search UI, Widgets, Edge) and can be network-isolated app-wide with one toggle.
+**📵 Silence the phone-home.** Many apps ship with usage-data collection switched on
+by default — you never opted in. Shields Up flips each vendor's *own official*
+opt-out switch, saves the previous setting, and then checks the app actually stopped
+calling home. Want it back the way it was? One click reverts exactly.
 
-### 🔒 OS hardening controls
-One-click, reversible registry-backed toggles for the noisy parts of Windows: **language sync, Windows Widgets, the taskbar SearchHost box, SearchHost background activity & Bing search suggestions, StartMenuExperienceHost, ShellExperienceHost**, plus a proactive outbound block for WebView2.
+In a hurry? **Quick Scan** is the whole ritual as a checklist — it reads your
+machine's current state first, shows what's already done in green, and finishes the
+rest in order.
 
----
+## The part that matters: undo
 
-## 🛡️ Default security posture
+Every action asks before it acts. Almost every action can be reversed. The app runs
+only when you open it — no background processes, no tray icon, no auto-start unless
+you ask for it. And uninstalling is deleting the folder.
 
-MyFirewall does not start empty. A built-in **default policy** (single source of truth: [`MyFirewall.Desktop/Services/DefaultPolicy.cs`](MyFirewall.Desktop/Services/DefaultPolicy.cs), compiled into both frontends) is seeded on every launch:
+## Who makes this
 
-| Default | Contents |
+**Dan Park — MagicPoint.ai, California.** Shields Up grew out of
+[AutoCommand](https://github.com/dparksports/autocommand-windows), an
+earlier Windows security toolkit of mine, by keeping the parts
+a normal PC owner actually wants and leaving the analyst tooling behind. The same
+credit sits in the app, at the bottom of the Settings page.
+
+## "Why should I run an app from a publisher I don't know?"
+
+You shouldn't — not on faith, ours or anyone's. Everything below can be **checked**
+instead of trusted:
+
+- **Read every line.** The complete source is the
+  [shields-up repository](https://github.com/dparksports/shields-up) (Apache 2.0).
+  What you download is built from exactly this code.
+- **Watch what it does.** No installer — unzip and run. No service, no scheduled
+  task, nothing in your tray. Close it, and it isn't running.
+- **Watch the network.** Exactly two kinds of connection, both only when *you* click:
+  the update check talks to GitHub; the DBX Safety page downloads a Microsoft update
+  when asked. No telemetry, no analytics, no accounts.
+- **Verify the download.** Every release ships `SHA256SUMS.txt`
+  (`certutil -hashfile <zip> SHA256` before you run anything). Settings →
+  **Verify this install** does the whole check in-app: your version against the
+  release, the zip's SHA256 against the published checksum, and every release
+  file in your folder with the expected size. The app's own update checker
+  runs the same check before trusting a download.
+- **See changes before they happen.** Nothing executes without a confirmation that
+  says what will change — and Windows' own signed components are locked out entirely.
+- **Remove everything.** Delete the folder, delete `C:\ProgramData\ShieldsUp`, and
+  there is no trace left.
+
+**About the blue "unknown publisher" warning:** the app is not yet code-signed — a
+certificate that ties the binary to a verified identity. Until releases are signed,
+Windows will warn on first run. That's Windows doing its job; the list above is ours.
+
+**Why it asks for administrator:** managing firewall rules, system services, and
+device drivers requires it. A version that didn't ask couldn't do what it promises.
+
+## What's inside
+
+![The fourteen tools](docs/img/features.png)
+
+| Tool | For you, that means |
 |---|---|
-| **Blocked IPs** | The adopted block list — known Defender/GameBar/Widgets/SearchHost/StartMenu/WebView2 telemetry endpoints, seeded verbatim from the currently configured `blocked.txt` |
-| **Blocked processes** | `MpCmdRun`, `MsMpEng`, `StartMenuExperienceHost` — blocked by name; every new destination they touch is firewall-blocked automatically |
-| **Kill list** (`kill.txt`) | `SettingSyncHost`, `Widgets`, `SearchHost`, `StartMenuExperienceHost`, `ShellExperienceHost` — terminated when hardening applies |
-| **Hardening defaults** | Language sync, Widgets, SearchHost box, SearchHost background & Bing search, StartMenuExperienceHost and ShellExperienceHost all **disabled** at startup |
+| ⚡ **Quick Scan** | The whole ritual as a checklist — reads your machine first, shows what's done, finishes the rest. |
+| 📡 **Attack Surface** | Green/amber count of every hidden entry point, then one-click shutoff for each kind. |
+| 🛡 **Firewall** | Presets, every rule in a sortable list, **Restore Internet** to undo all blocking at once. |
+| 📦 **Bloatware** | Uninstall preinstalled apps against an editable list; system components never offered. |
+| 📊 **Telemetry** | Each vendor's official opt-out, snapshotted and reversible, plus a "did it stop?" check. |
+| 👁 **Privacy** | VPN services, hidden hotspot adapters, kernel debug, the feedback task — switchable. |
+| ❄ **Update Control** | Freeze an app at its current version — it keeps working, its updater stops. |
+| 📋 **Tasks** | Everything Windows has scheduled, hidden items included — run, stop, disable, delete. |
+| 🚀 **Startup** | What launches at boot, from where, with delete. |
+| 🌙 **Hibernation** | Remove the hiberfile (or bring it back); true full shutdown. |
+| 🔒 **OS Hardening** | The big Windows security switches in plain language, plus a hosts-file check. |
+| ✅ **DBX Safety** | Verifies your boot files haven't been tampered with; applies Microsoft's revocation updates. |
+| 🔓 **Unblock** | Removes the "downloaded from the internet" mark that makes Windows nag on extracted files. |
+| ⚙ **Settings** | Start-at-logon (optional), check for updates, version info. |
 
-**Defaults never fight the user.** Un-blocking a default entry records an opt-out in `defaults_removed.txt`, and manually changing any hardening toggle flips the master switch (`HKLM\SOFTWARE\Policies\MyFirewall\ApplyHardeningDefaults`) so startup stops re-asserting. Delete the opt-out (or set the value back to `1`) to return to the default posture.
+## Try it
 
----
+1. Download the zip from [releases](https://github.com/dparksports/shields-up/releases/latest).
+2. (Optional, encouraged) check the hash against `SHA256SUMS.txt` — or, easier:
+   after your first run, press **Verify this install** in Settings and the app
+   does the whole check for you.
+3. Extract anywhere and run `ShieldsUp.exe`. Windows will ask for permission — see admin, above.
+4. Start with **Quick Scan**, and read before you click.
 
-## 📄 Policy files
-
-All state lives next to the executable — portable, human-readable, no installer database:
-
-| File | Format | Purpose |
-|---|---|---|
-| `blocked.txt` | `IP\|Process\|timestamp` (non-IP key = blocked process) | Firewall-block list; auto-enforced |
-| `ignored.txt` | one app name per line | Trusted apps hidden from the live feed |
-| `kill.txt` | one process name per line | Processes terminated when hardening defaults apply |
-| `defaults_removed.txt` | `block:<key>` / `kill:<name>` | Your explicit opt-outs from the built-in defaults |
-
----
-
-## 🖥️ CLI TUI
-
-The CLI is a state-machine terminal app rendered as a single atomic frame (flicker-free `Live` rendering, no screen-clearing wizards): a **row cursor** over the live feed, **tabs**, an instant **filter**, and **overlay panels** for details, confirmations and help — the live feed keeps refreshing behind them.
-
-**Tabs:** `1` All · `2` Outbound · `3` Inbound · `4` Blocked rules · `5` Ignored · `6` Alert log · `7` Domain cache · `S` System settings
-
-| Key | Action |
-|---|---|
-| `↑`/`↓` / `PgUp`/`PgDn` | Move / page the row cursor (auto-scrolls) |
-| `1`–`7`, `S` | Switch tab / open system settings |
-| `Enter` / `P` | Threat-intelligence detail for the selected connection |
-| `B` | Firewall-block the selected connection's IP |
-| `K` | Kill the selected process tree (confirm overlay) |
-| `I` | Ignore the selected process |
-| `/` | Filter the live feed (process, IP, domain, geo) — `Esc` clears |
-| `X` / `Space` / `A` | Remove / add entries on the Blocked & Ignored tabs |
-| `C` | Clear the alert log |
-| `T` | Toggle monitoring strategy (connection-driven ⇄ process-start ETW) |
-| `R` | Restore hardcoded firewall rules (confirm overlay) |
-| `H` / `F1` / `?` | Help overlay |
-| `Q` | Graceful stop & exit |
-
-```bash
-MyFirewall.exe --refresh 3   # optional refresh interval in seconds
-```
+**Uninstalling** = deleting the folder.
 
 ---
 
-## 🏗️ Build & installation
+## For developers
 
-**Requirements:** Windows 10/11 x64, .NET 10 SDK, Administrator privileges (ETW kernel sessions and firewall COM need elevation).
+The Shields Up source lives in [its own repository](https://github.com/dparksports/shields-up);
+this one holds the deprecated MyFirewall.
+
+![Architecture](docs/img/architecture.png)
+
+Native WinUI 3 / Windows App SDK on .NET 10, two projects: `ShieldsUp.Core`
+(the entire engine — COM/WMI/P-Invoke/WinRT, zero UI types, zero PowerShell;
+native CLI tools only through one audited `ProcessRunner`) and `ShieldsUp`
+(the shell + 14 pages). State is plain JSON under `C:\ProgramData\ShieldsUp`
+(same file formats as AutoCommand, namespaced); sessions, navigation, and
+exceptions log to `logs\app.log` with WER local dumps registered for native
+crashes. The update checker compares against `releases/latest` and
+SHA256-verifies downloads against `SHA256SUMS.txt`. Versions are build dates,
+stamped automatically by `publish.ps1`.
 
 ```powershell
-git clone https://github.com/dparksports/myfirewall-windows.git
-cd myfirewall
-
-# CLI
-dotnet build MyFirewall.csproj -c Release
-
-# WPF Desktop app
-dotnet build MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release
-
-# Self-contained single-file publish (both)
-dotnet publish MyFirewall.csproj                -c Release -r win-x64 --self-contained -o ./publish/cli
-dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -r win-x64 --self-contained -o ./publish/desktop
+dotnet build ShieldsUp.slnx          # build
+./publish.ps1                        # self-contained win-x64 folder + zip + SHA256SUMS
 ```
 
-Grab a ready-to-run build from the [Releases page](https://github.com/dparksports/myfirewall-windows/releases) — each release ships `release_cli_win_x64.zip` and `release_desktop_win_x64.zip`, fully self-contained (no .NET install required). Run as Administrator.
+Unsigned builds may be blocked by Smart App Control; for distribution guidance
+(Azure Artifact Signing, ~$9.99/mo) see the author.
 
-### Automated release
+## License
 
-```powershell
-.\release.ps1 -BumpType Patch          # version bump → publish → zip → tag → GitHub release
-.\release.ps1 -DryRun                  # preview without changes
-```
-
-Requires `GITHUB_TOKEN` (or `-Token`) for the release API call. A UAC manifest sidecar (`<App>.exe.manifest`) is copied next to each published binary so elevation survives single-file publish.
-
-### Infographics
-
-The banners in this README are generated from HTML sources with headless Edge:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File assets\render_infographics.ps1
-```
+Apache License 2.0 — see [LICENSE](LICENSE). Shields Up is derived from AutoCommand.
 
 ---
 
-## 🏛️ Architecture
-
-<p align="center">
-  <img src="assets/architecture.png" alt="MyFirewall system architecture" width="100%">
-</p>
-
-```
-Frontends        CLI (Spectre.Console)   ·   WPF Desktop (MVVM)
-                     │  commands & policy
-Core Services    NetworkMonitorService (ETW) · ProcessMetadataService · DefaultPolicy + DataService · GeoIpService
-                     │  enforcement
-Enforcement      FirewallService (INetFwPolicy2 COM) · AutoEnforce loop · SystemSettingsService (registry/IFEO)
-                     │  kernel & OS
-Windows          ETW kernel provider · Windows Filtering Platform · Registry policy store
-```
-
----
-
-## 🩺 Troubleshooting
-
-**"Failed to block … Ensure app is running as Administrator"** — this alert isn't always about elevation. The underlying COM error is appended to `crash.log` next to the executable, so check it first.
-
-One known case, fixed in `v2026.10.6`: Windows 11 24H2/26H2 **rejects any firewall rule whose description contains the `|` character**, failing `Rules.Add` with *"Value does not fall within the expected range"* (`E_INVALIDARG`). Older releases embedded `|` in every auto-generated rule description, so on a machine upgraded to 24H2/26H2 every block attempt failed no matter how the app was launched. Re-downloading the latest release (or rebuilding) resolves it — the separator in rule descriptions is now `-`.
-
----
-
-## 📜 License
-
-Distributed under the [Apache License 2.0](LICENSE).
-
-<p align="center"><i>Made with ❤️ in California.</i></p>
+Made with ❤️ in California · © 2026 Dan Park · MagicPoint.ai
