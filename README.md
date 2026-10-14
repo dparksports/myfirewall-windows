@@ -1,4 +1,4 @@
-> ⚠️ **MyFirewall is deprecated — use Shields Up for Windows instead.** This repository (MyFirewall) is no longer maintained. Shields Up, from the same author, is where the work continues: one-click firewall presets, telemetry opt-outs, and OS hardening — every action reversible. **[Download the latest Shields Up release here](https://github.com/dparksports/shields-up/releases/latest).**
+> ⚠️ **MyFirewall is deprecated — use [Shields Up](https://github.com/dparksports/shields-up) for Windows instead.** This repository (MyFirewall) is no longer maintained. Shields Up, from the same author, is where the work continues: one-click firewall presets, telemetry opt-outs, and OS hardening — every action reversible. **[GitHub repo](https://github.com/dparksports/shields-up) · [Download the latest release](https://github.com/dparksports/shields-up/releases/latest).**
 
 # Shields Up
 
