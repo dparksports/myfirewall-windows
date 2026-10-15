@@ -369,29 +369,62 @@
                         <RowDefinition Height="8"/>
                         <RowDefinition Height="1*"/>
                         <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto" MaxHeight="180"/>
+                        <RowDefinition Height="8"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="8"/>
                         <RowDefinition Height="Auto" MaxHeight="200"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Blocked IPs Panel -->
+                    <!-- Blocked IPs / Processes Panel -->
                     <Border Grid.Row="0" Style="{StaticResource CardStyle}">
                         <Grid>
                             <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
                             <!-- Header with count badge -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                 <TextBlock Text="🚫" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="Blocked Addresses" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                                <TextBlock Text="Blocked" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
                                 <Border Style="{StaticResource CountBadge}">
                                     <TextBlock Text="{Binding BlockedCount}" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource StatusRed}"/>
                                 </Border>
                             </StackPanel>
 
-                            <ListBox Grid.Row="1" ItemsSource="{Binding BlockedIPs}">
+                            <!-- Block-by-name input: resolves every location of the name
+                                 and watches for new ones (ETW process start). -->
+                            <Grid Grid.Row="1" Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.InputBindings>
+                                    <KeyBinding Key="Enter" Command="{Binding BlockByNameCommand}"/>
+                                </Grid.InputBindings>
+                                <Grid>
+                                    <TextBox x:Name="BlockNameBox" Text="{Binding BlockByNameInput, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center"/>
+                                    <TextBlock Text="e.g. taskhostw.exe" IsHitTestVisible="False" VerticalAlignment="Center"
+                                               Margin="8,0,0,0" FontSize="11" Foreground="{DynamicResource TextMuted}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                                <Setter Property="Visibility" Value="Hidden"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Text, ElementName=BlockNameBox}" Value="">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                                <Button Grid.Column="1" Content="🛑 Block" Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                                        Command="{Binding BlockByNameCommand}" ToolTip="Block every location of this process name and watch for new copies."/>
+                            </Grid>
+
+                            <ListBox Grid.Row="2" ItemsSource="{Binding BlockedIPs}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
                                         <Grid Margin="0,1">
@@ -453,8 +486,50 @@
                         </Grid>
                     </Border>
 
-                    <!-- System Controls Panel -->
+                    <!-- Task Host DLLs Panel: taskhostw.exe instances with the hosted
+                         COM handler resolved to its DLL + owning scheduled task —
+                         the taskhostw analog of the svchost PID→service pivot. -->
                     <Border Grid.Row="4" Style="{StaticResource CardStyle}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="🧬" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Task Host DLLs" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                                <Border Style="{StaticResource CountBadge}">
+                                    <TextBlock Text="{Binding TaskHostDlls.Count}" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource AccentPurple}"/>
+                                </Border>
+                            </StackPanel>
+
+                            <ListBox Grid.Row="1" ItemsSource="{Binding TaskHostDlls}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,2" ToolTip="{Binding CommandLine}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Display}" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource TextPrimary}"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding TrafficFlag}" FontSize="10"
+                                                           Foreground="{DynamicResource StatusAmber}" VerticalAlignment="Center"/>
+                                            </Grid>
+                                            <TextBlock Text="{Binding DllPath}" FontSize="10" Foreground="{DynamicResource AccentCyan}"
+                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding DllPath}"/>
+                                            <TextBlock Text="{Binding TaskNames}" FontSize="10" Foreground="{DynamicResource TextMuted}"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+
+                    <!-- System Controls Panel -->
+                    <Border Grid.Row="6" Style="{StaticResource CardStyle}">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -481,7 +556,7 @@
                     </Border>
 
                     <!-- Recent Alerts Panel -->
-                    <Border Grid.Row="6" Style="{StaticResource CardStyle}">
+                    <Border Grid.Row="8" Style="{StaticResource CardStyle}">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>

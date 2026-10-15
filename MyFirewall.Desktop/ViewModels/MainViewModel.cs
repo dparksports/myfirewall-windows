@@ -22,6 +22,8 @@ namespace MyFirewall.Desktop.ViewModels
         private readonly DataService _dataService;
         private readonly GeoIpService _geoIpService;
         private readonly SystemSettingsService _systemSettingsService;
+        private readonly ProcessBlockListService _processBlockList;
+        private readonly TaskHostDllTracker _taskHostTracker;
         private readonly DispatcherTimer _timer;
         private readonly DateTime _startTime = DateTime.Now;
         private readonly Action<string> _logError;
@@ -31,9 +33,8 @@ namespace MyFirewall.Desktop.ViewModels
         private HashSet<string> _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _killAppsSet = new(StringComparer.OrdinalIgnoreCase);
 
-        // name → path of blocked processes with an app-level rule; drives the
-        // reconciliation sweep that repairs drifted/deleted rules every ~30s.
-        private readonly Dictionary<string, string> _appRulePaths = new(StringComparer.OrdinalIgnoreCase);
+        // Reconciliation sweep counter (~30s at the default 2s refresh); also paces
+        // the taskhostw DLL snapshot.
         private int _sweepTicks;
 
         // Smart-diff: keyed by ConnectionKey for in-place updates
@@ -47,6 +48,7 @@ namespace MyFirewall.Desktop.ViewModels
         public ObservableCollection<BlockedIPEntry> BlockedIPs { get; } = new();
         public ObservableCollection<IgnoredAppEntry> IgnoredApps { get; } = new();
         public ObservableCollection<AlertEntry> Alerts { get; } = new();
+        public ObservableCollection<TaskHostDllEntry> TaskHostDlls { get; } = new();
 
         private bool _isMonitorActive;
         public bool IsMonitorActive { get => _isMonitorActive; set => SetProperty(ref _isMonitorActive, value); }
@@ -146,6 +148,14 @@ namespace MyFirewall.Desktop.ViewModels
                     ApplyFilterAndUpdate(_latestConnections);
                 }
             }
+        }
+
+        private string _blockByNameInput = "";
+        /// <summary>User-typed process name to block ("taskhostw" or "taskhostw.exe").</summary>
+        public string BlockByNameInput
+        {
+            get => _blockByNameInput;
+            set => SetProperty(ref _blockByNameInput, value);
         }
 
         private string _statusMessage = "Initializing...";
@@ -272,6 +282,7 @@ namespace MyFirewall.Desktop.ViewModels
         // Commands
         public RelayCommand<object> BlockIPCommand { get; }
         public RelayCommand<object> BlockProcessCommand { get; }
+        public RelayCommand BlockByNameCommand { get; }
         public RelayCommand<string> UnblockIPCommand { get; }
         public RelayCommand<string> IgnoreAppCommand { get; }
         public RelayCommand<string> UnignoreAppCommand { get; }
@@ -305,6 +316,8 @@ namespace MyFirewall.Desktop.ViewModels
             _firewallService      = new FirewallService(logError);
             _systemSettingsService= new SystemSettingsService(logError);
             _networkMonitor       = new NetworkMonitorService(logError, _geoIpService);
+            _processBlockList     = new ProcessBlockListService(_firewallService, logError);
+            _taskHostTracker      = new TaskHostDllTracker(logError);
 
             _networkMonitor.OnProactiveAlert = alert =>
             {
@@ -318,7 +331,8 @@ namespace MyFirewall.Desktop.ViewModels
             // firewall-blocked the moment the ETW event arrives (milliseconds, not one
             // refresh interval), including UDP and send-and-die beacons.
             _networkMonitor.IsBlockedProcess = name => _blockedProcessNames.Contains(name);
-            _networkMonitor.OnAppRuleEnsured = (name, path) => _appRulePaths[name] = path;
+            _networkMonitor.OnAppRuleEnsured = (name, path) => _processBlockList.RegisterPath(
+                ProcessBlockListService.NormalizeName(name), path);
             _networkMonitor.OnBlockedEndpointObserved = (remoteIp, name, pid, isUdp) =>
             {
                 Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
@@ -341,9 +355,44 @@ namespace MyFirewall.Desktop.ViewModels
                 }));
             };
 
+            // Block-by-name watcher: when a blocked process name starts at a path we
+            // have not ruled yet (new copy, other arch dir), convert the kernel image
+            // path and add a firewall rule for that location immediately.
+            _networkMonitor.OnBlockedProcessStart = (ntImagePath, bareName, pid) =>
+            {
+                Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        string name = ProcessBlockListService.NormalizeName(bareName);
+                        string dosPath = ProcessBlockListService.NtToDosPath(ntImagePath) ?? ntImagePath;
+                        if (!_processBlockList.RegisterPath(name, dosPath)) return;
+
+                        string dictKey = _blockedIPsDict.Keys.FirstOrDefault(
+                            k => k.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? name;
+                        if (_blockedIPsDict.TryGetValue(dictKey, out var meta))
+                        {
+                            _blockedIPsDict[dictKey] = new BlockedIPMetadata
+                            {
+                                Application = string.Join(";", _processBlockList.GetKnownPaths(name)),
+                                Timestamp = meta.Timestamp
+                            };
+                            _dataService.SaveBlocked(_blockedIPsDict);
+                        }
+                        SyncObservables();
+                        AddAlert($"Watch: {name} appeared at a new location (PID {pid}) — blocked {dosPath}", AlertSeverity.Warning);
+                    }
+                    catch (Exception ex)
+                    {
+                        AddAlert($"Block watcher failed for {bareName}: {ex.Message}", AlertSeverity.Critical);
+                    }
+                }));
+            };
+
             // Fix: StopAppCommand uses object parameter so WPF string→int conversion isn't needed
             BlockIPCommand         = new RelayCommand<object>(ExecuteBlockIP);
             BlockProcessCommand    = new RelayCommand<object>(ExecuteBlockProcess);
+            BlockByNameCommand     = new RelayCommand(_ => ExecuteBlockByName());
             UnblockIPCommand       = new RelayCommand<string>(ExecuteUnblockIP);
             IgnoreAppCommand       = new RelayCommand<string>(ExecuteIgnoreApp);
             UnignoreAppCommand     = new RelayCommand<string>(ExecuteUnignoreApp);
@@ -391,6 +440,29 @@ namespace MyFirewall.Desktop.ViewModels
             _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_refreshInterval) };
             _timer.Tick += Timer_Tick;
             _timer.Start();
+
+            // First taskhostw DLL snapshot off the UI thread (the COM task-folder walk
+            // can take a second on first run); the sweep keeps it fresh afterwards.
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try { RefreshTaskHostDlls(); }
+                catch (Exception ex) { _logError($"Initial taskhost snapshot: {ex.Message}"); }
+            });
+        }
+
+        /// <summary>
+        /// Rebuilds the taskhostw panel: one entry per live instance, with the hosted
+        /// handler CLSID resolved to its DLL and the owning scheduled task(s).
+        /// Safe off the UI thread — marshals the collection update via the dispatcher.
+        /// </summary>
+        private void RefreshTaskHostDlls()
+        {
+            var snapshot = _taskHostTracker.Snapshot(_latestConnections);
+            Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+            {
+                TaskHostDlls.Clear();
+                foreach (var entry in snapshot) TaskHostDlls.Add(entry);
+            }));
         }
 
         private static bool CheckIsAdmin()
@@ -443,40 +515,51 @@ namespace MyFirewall.Desktop.ViewModels
         }
 
         /// <summary>
-        /// Applies app-level firewall rules for blocked process names already running at
-        /// launch (mirrors the CLI's ApplyProactiveProcessBlocks), so default-blocked
-        /// processes such as MpCmdRun / MsMpEng / StartMenuExperienceHost are isolated
-        /// even before they make their first connection.
+        /// Applies app-level firewall rules for every blocked process name, whether it
+        /// arrived from defaults (MpCmdRun / MsMpEng / …) or the user's own block-by-name
+        /// entries. For each name: seed the known-path set from persisted state, resolve
+        /// every current location (running instances + standard system dirs), and rule
+        /// them all — so a not-yet-running binary like taskhostw.exe is still blocked
+        /// before its first connection. Names with no resolvable path stay registered:
+        /// the ETW process-start watcher firewalls them the moment they appear.
         /// </summary>
         private void ApplyDefaultProcessFirewallBlocks()
         {
+            bool dirty = false;
             foreach (var procName in _blockedProcessNames.ToList())
             {
                 try
                 {
-                    foreach (var proc in Process.GetProcessesByName(procName))
-                    {
-                        try
-                        {
-                            string? path = null;
-                            try { path = proc.MainModule?.FileName; } catch { /* access denied for protected processes */ }
-                            if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+                    if (_blockedIPsDict.TryGetValue(procName, out var existing))
+                        _processBlockList.SeedKnownPaths(procName, ParseStoredPaths(existing.Application));
 
-                            if (_firewallService.AddBlockProcessRule(procName, path))
-                            {
-                                _appRulePaths[procName] = path;
-                                AddAlert($"Startup block: {procName} (PID {proc.Id}) — app-level firewall rule applied.", AlertSeverity.Warning);
-                            }
-                        }
-                        finally { proc.Dispose(); }
+                    var paths = _processBlockList.BlockByName(procName);
+                    if (paths.Count == 0) continue;
+
+                    if (_blockedIPsDict.TryGetValue(procName, out var meta))
+                    {
+                        _blockedIPsDict[procName] = new BlockedIPMetadata
+                        {
+                            Application = string.Join(";", _processBlockList.GetKnownPaths(procName)),
+                            Timestamp = meta.Timestamp
+                        };
+                        dirty = true;
                     }
+                    AddAlert($"Startup block: {procName} — {paths.Count} location(s) ruled.", AlertSeverity.Warning);
                 }
                 catch (Exception ex)
                 {
                     _logError($"ApplyDefaultProcessFirewallBlocks [{procName}]: {ex.Message}");
                 }
             }
+            if (dirty) _dataService.SaveBlocked(_blockedIPsDict);
         }
+
+        /// <summary>Parses the ';'-joined path set persisted in a blocked.txt process entry.</summary>
+        private static List<string> ParseStoredPaths(string stored) =>
+            stored.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                  .Where(p => p.Contains('\\'))
+                  .ToList();
 
         private void RebuildBlockedProcessNames()
         {
@@ -497,7 +580,19 @@ namespace MyFirewall.Desktop.ViewModels
 
             BlockedIPs.Clear();
             foreach (var kvp in _blockedIPsDict.OrderBy(x => x.Key))
-                BlockedIPs.Add(new BlockedIPEntry { IP = kvp.Key, Application = kvp.Value.Application, Timestamp = kvp.Value.Timestamp });
+            {
+                string display = kvp.Value.Application;
+                if (!IPAddress.TryParse(kvp.Key, out _))
+                {
+                    // Process-name entry: the raw field is the persisted path set —
+                    // show "N path(s) blocked" instead of the raw ';'-joined blob.
+                    int pathCount = ParseStoredPaths(kvp.Value.Application).Count;
+                    display = pathCount > 0
+                        ? $"{pathCount} path(s) blocked"
+                        : (kvp.Value.Application.Contains('\\') ? kvp.Value.Application : "watching for first appearance");
+                }
+                BlockedIPs.Add(new BlockedIPEntry { IP = kvp.Key, Application = display, Timestamp = kvp.Value.Timestamp });
+            }
 
             BlockedCount = BlockedIPs.Count;
 
@@ -511,15 +606,18 @@ namespace MyFirewall.Desktop.ViewModels
         }
 
         /// <summary>
-        /// Re-asserts app-level rules for every blocked process; AddBlockProcessRule
-        /// checks rule existence internally, so this only repairs drift.
+        /// Re-asserts app-level rules for every blocked process at every known path;
+        /// AddBlockProcessRule checks rule existence internally, so this only repairs drift.
         /// </summary>
         private void ReassertAppRules()
         {
-            foreach (var kvp in _appRulePaths)
+            foreach (string name in _processBlockList.RegisteredNames.ToList())
             {
-                try { _firewallService.AddBlockProcessRule(kvp.Key, kvp.Value); }
-                catch { /* non-critical — retried next sweep */ }
+                foreach (string path in _processBlockList.GetKnownPaths(name))
+                {
+                    try { _firewallService.AddBlockProcessRule(name, path); }
+                    catch { /* non-critical — retried next sweep */ }
+                }
             }
         }
 
@@ -558,11 +656,13 @@ namespace MyFirewall.Desktop.ViewModels
             }
 
             // Reconciliation sweep (~30s at the default 2s refresh): re-apply
-            // app-level rules that were deleted by other tools or policy refresh.
+            // app-level rules that were deleted by other tools or policy refresh,
+            // and refresh the taskhostw DLL snapshot.
             if (++_sweepTicks >= 15)
             {
                 _sweepTicks = 0;
                 ReassertAppRules();
+                RefreshTaskHostDlls();
             }
 
             // Apply filter (client-side) and smart-diff update
@@ -697,30 +797,71 @@ namespace MyFirewall.Desktop.ViewModels
         {
             if (parameter is not ConnectionInfo conn) return;
 
-            string app  = conn.ApplicationName;
-            string path = conn.ExecutablePath;
-
-            if (string.IsNullOrWhiteSpace(app) || app == "Unknown" || string.IsNullOrWhiteSpace(path) || path == "N/A")
+            string app = conn.ApplicationName;
+            if (string.IsNullOrWhiteSpace(app) || app == "Unknown" || app == "Idle")
             {
-                AddAlert("Cannot block application: executable path unknown.", AlertSeverity.Warning);
+                AddAlert("Cannot block application: name unknown.", AlertSeverity.Warning);
+                return;
+            }
+            if (IPAddress.TryParse(app, out _)) return;
+
+            BlockProcessName(app, hintPath: conn.ExecutablePath);
+        }
+
+        /// <summary>
+        /// Blocks a process BY NAME (e.g. "taskhostw.exe"), not just the one path a
+        /// live connection happened to use: resolves every location the name exists at
+        /// (running instances + standard system dirs), rules them all, and registers
+        /// the name with the ETW process-start watcher for paths not present yet.
+        /// </summary>
+        private void ExecuteBlockByName()
+        {
+            string raw = (BlockByNameInput ?? "").Trim();
+            BlockByNameInput = "";
+            if (raw.Length == 0) return;
+
+            if (IPAddress.TryParse(raw, out _))
+            {
+                AddAlert("That looks like an IP address — right-click a connection to block it.", AlertSeverity.Warning);
                 return;
             }
 
-            if (!_blockedIPsDict.ContainsKey(app))
+            BlockProcessName(raw, hintPath: null);
+        }
+
+        private void BlockProcessName(string rawName, string? hintPath)
+        {
+            string name = ProcessBlockListService.NormalizeName(rawName);
+            if (name.Length == 0) return;
+
+            if (_blockedIPsDict.Keys.Any(k => k.Equals(name, StringComparison.OrdinalIgnoreCase)))
             {
-                if (_firewallService.AddBlockProcessRule(app, path))
-                {
-                    _blockedIPsDict[app] = new BlockedIPMetadata { Application = path, Timestamp = DateTime.Now };
-                    _dataService.SaveBlocked(_blockedIPsDict);
-                    SyncObservables();
-                    Timer_Tick(null, EventArgs.Empty);
-                    AddAlert($"Blocked application {app}", AlertSeverity.Warning);
-                }
-                else
-                {
-                    AddAlert($"Failed to block {app}. Ensure app is running as Administrator.", AlertSeverity.Critical);
-                }
+                AddAlert($"{name} is already blocked.", AlertSeverity.Info);
+                return;
             }
+
+            // A hint path from a live connection counts as a known location even when
+            // the resolver cannot see the instance anymore (process exited mid-block).
+            if (!string.IsNullOrWhiteSpace(hintPath) && hintPath != "N/A" && File.Exists(hintPath))
+                _processBlockList.SeedKnownPaths(name, new[] { hintPath });
+
+            var paths = _processBlockList.BlockByName(name);
+
+            _blockedIPsDict[name] = new BlockedIPMetadata
+            {
+                Application = paths.Count > 0
+                    ? string.Join(";", _processBlockList.GetKnownPaths(name))
+                    : "watching — no copy found yet",
+                Timestamp = DateTime.Now
+            };
+            _dataService.SaveBlocked(_blockedIPsDict);
+            SyncObservables();
+            Timer_Tick(null, EventArgs.Empty);
+
+            if (paths.Count > 0)
+                AddAlert($"Blocked {name} at {paths.Count} location(s): {string.Join(", ", paths)}", AlertSeverity.Warning);
+            else
+                AddAlert($"Blocked {name} by name — no copy found yet; the watcher will firewall it the moment it appears.", AlertSeverity.Warning);
         }
 
         private void ExecuteUnblockIP(string? ip)
@@ -732,7 +873,12 @@ namespace MyFirewall.Desktop.ViewModels
                 if (System.Net.IPAddress.TryParse(ip, out _))
                     _firewallService.RemoveBlockRule(ip);
                 else
+                {
+                    // Process-name entry: drop every path's rule pair and forget the
+                    // name so the process-start watcher stops watching it.
                     _firewallService.RemoveBlockProcessRule(ip);
+                    _processBlockList.Forget(ProcessBlockListService.NormalizeName(ip));
+                }
 
                 // Remember explicit opt-outs so startup seeding never re-adds a default entry.
                 if (DefaultPolicy.IsDefaultBlockedKey(ip))

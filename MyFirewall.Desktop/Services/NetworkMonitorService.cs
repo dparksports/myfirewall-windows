@@ -55,6 +55,13 @@ namespace MyFirewall.Desktop.Services
         /// <summary>Raised (name, path) when an app-level rule is first ensured for a blocked process.</summary>
         public Action<string, string>? OnAppRuleEnsured { get; set; }
 
+        /// <summary>Raised (ntImagePath, bareName, pid) when a process whose bare name
+        /// is in the blocked set starts. Fired from the ETW pump thread via Task.Run —
+        /// handlers may do firewall COM work without stalling the event stream.
+        /// ntImagePath is a kernel path (\Device\HarddiskVolumeN\…); convert with
+        /// ProcessBlockListService.NtToDosPath.</summary>
+        public Action<string, string, int>? OnBlockedProcessStart { get; set; }
+
         private readonly HashSet<string> _appRuleEnsured = new(StringComparer.OrdinalIgnoreCase);
 
         public NetworkMonitorService(Action<string> logError, GeoIpService geoIpService)
@@ -142,8 +149,20 @@ namespace MyFirewall.Desktop.Services
                     if (data.ProcessID > 0)
                     {
                         string imageName = data.ImageFileName;
-                        _pidImage[data.ProcessID] = System.IO.Path.GetFileNameWithoutExtension(imageName);
+                        string bareName = System.IO.Path.GetFileNameWithoutExtension(imageName);
+                        _pidImage[data.ProcessID] = bareName;
                         _metadataService.RegisterProcessStart(data.ProcessID, data.ParentID, imageName);
+
+                        // Block-by-name watcher: the moment a blocked name appears at ANY
+                        // path (new copy, other arch dir), the host resolves the full image
+                        // path and adds a firewall rule for it — no first-connection leak.
+                        var blockedStart = OnBlockedProcessStart;
+                        if (blockedStart != null && IsBlockedProcess?.Invoke(bareName) == true)
+                        {
+                            string fullImagePath = imageName;
+                            int pid = data.ProcessID;
+                            Task.Run(() => blockedStart(fullImagePath, bareName, pid));
+                        }
 
                         if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
                         {
@@ -608,18 +627,20 @@ namespace MyFirewall.Desktop.Services
         /// <summary>
         /// Applies an app-level block rule the first time a blocked process is seen,
         /// so per-IP chasing becomes a safety net instead of the only defense.
+        /// Keyed by name+path: one name existing at several locations gets a rule
+        /// for each (System32 taskhostw and a copy elsewhere are different paths).
         /// </summary>
         private void EnsureAppRule(FirewallService fwService, string processName, string? executablePath)
         {
             if (string.IsNullOrWhiteSpace(processName) || processName is "Unknown" or "Idle") return;
             if (string.IsNullOrWhiteSpace(executablePath) || executablePath == "N/A") return;
             if (!System.IO.File.Exists(executablePath)) return;
-            if (!_appRuleEnsured.Add(processName)) return;
+            if (!_appRuleEnsured.Add(processName + "@" + executablePath.ToLowerInvariant())) return;
 
             if (fwService.AddBlockProcessRule(processName, executablePath))
                 OnAppRuleEnsured?.Invoke(processName, executablePath);
             else
-                _appRuleEnsured.Remove(processName);
+                _appRuleEnsured.Remove(processName + "@" + executablePath.ToLowerInvariant());
         }
 
         public void Dispose()

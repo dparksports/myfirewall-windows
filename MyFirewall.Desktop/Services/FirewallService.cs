@@ -248,6 +248,18 @@ namespace MyFirewall.Desktop.Services
             }
         }
 
+        /// <summary>
+        /// Short stable suffix identifying a specific executable path in a rule name,
+        /// so one process name blocked at several locations (System32 + SysWOW64 + a
+        /// copy elsewhere) gets one rule pair per location instead of colliding.
+        /// </summary>
+        private static string PathHash(string executablePath)
+        {
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            byte[] hash = sha.ComputeHash(System.Text.Encoding.Unicode.GetBytes(executablePath.ToLowerInvariant()));
+            return Convert.ToHexString(hash, 0, 4);
+        }
+
         public bool AddBlockProcessRule(string appName, string executablePath)
         {
             if (string.IsNullOrWhiteSpace(executablePath) || executablePath == "N/A") return false;
@@ -258,16 +270,19 @@ namespace MyFirewall.Desktop.Services
                 {
                     INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return false;
-                    
+
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-                    
-                    string outName = $"{FirewallRulePrefix}-APP-{appName}-OUT";
+
+                    string tag = $"{appName}-{PathHash(executablePath)}";
+                    string outName = $"{FirewallRulePrefix}-APP-{tag}-OUT";
+                    string inName  = $"{FirewallRulePrefix}-APP-{tag}-IN";
+
                     try { if (policy.Rules.Item(outName) != null) {} } catch {
                         dynamic ruleOut = Activator.CreateInstance(ruleType)!;
                         ruleOut.Name = outName;
-                        ruleOut.Description = $"Auto-blocked process {appName} by TCP Monitor";
+                        ruleOut.Description = $"Auto-blocked process {appName} ({executablePath}) by TCP Monitor";
                         ruleOut.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
-                        
+
                         string? pfn = GetPackageFamilyName(executablePath);
                         if (pfn != null)
                         {
@@ -277,7 +292,7 @@ namespace MyFirewall.Desktop.Services
                         {
                             ruleOut.ApplicationName = executablePath;
                         }
-                        
+
                         ruleOut.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
                         ruleOut.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                         ruleOut.Enabled = true;
@@ -285,13 +300,12 @@ namespace MyFirewall.Desktop.Services
                         ((dynamic)policy).Rules.Add(ruleOut);
                     }
 
-                    string inName = $"{FirewallRulePrefix}-APP-{appName}-IN";
                     try { if (policy.Rules.Item(inName) != null) {} } catch {
                         dynamic ruleIn = Activator.CreateInstance(ruleType)!;
                         ruleIn.Name = inName;
-                        ruleIn.Description = $"Auto-blocked process {appName} by TCP Monitor";
+                        ruleIn.Description = $"Auto-blocked process {appName} ({executablePath}) by TCP Monitor";
                         ruleIn.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
-                        
+
                         string? pfn = GetPackageFamilyName(executablePath);
                         if (pfn != null)
                         {
@@ -301,7 +315,7 @@ namespace MyFirewall.Desktop.Services
                         {
                             ruleIn.ApplicationName = executablePath;
                         }
-                        
+
                         ruleIn.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
                         ruleIn.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                         ruleIn.Enabled = true;
@@ -357,9 +371,24 @@ namespace MyFirewall.Desktop.Services
                 {
                     INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return;
-                    
+
+                    // One process name may be blocked at several paths, each with its
+                    // own hashed rule pair — enumerate by prefix and remove them all.
+                    // The trailing dash keeps "foo" from matching "foo2" rules, and
+                    // still matches the legacy un-hashed names ("...-APP-foo-OUT").
+                    string prefix = $"{FirewallRulePrefix}-APP-{appName}-";
+                    var toRemove = new List<string>();
+                    foreach (INetFwRule r in policy.Rules)
+                    {
+                        try { if (r.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) toRemove.Add(r.Name); }
+                        catch { }
+                    }
+                    foreach (var name in toRemove) policy.Rules.Remove(name);
+
+                    // Legacy pre-hash names (exact, no trailing dash component).
                     try { policy.Rules.Remove($"{FirewallRulePrefix}-APP-{appName}-OUT"); } catch { }
                     try { policy.Rules.Remove($"{FirewallRulePrefix}-APP-{appName}-IN"); } catch { }
+
                     _cachedRuleCount = -1;
                 }
                 catch (Exception ex) { _logError($"FirewallService.RemoveBlockProcessRule({appName}): {ex.Message}"); }

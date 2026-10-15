@@ -102,5 +102,27 @@ namespace MyFirewall.Desktop.Models
     {
         public string Application { get; set; } = "";
     }
+
+    /// <summary>
+    /// One live taskhostw.exe instance with its hosted COM handler resolved to the
+    /// DLL that actually runs inside it — the taskhostw analog of the svchost
+    /// PID→service mapping used in triage.
+    /// </summary>
+    public class TaskHostDllEntry
+    {
+        public int PID { get; set; }
+        /// <summary>Handler argument from the command line: a COM CLSID ({...}) or a -dllname value.</summary>
+        public string Handler { get; set; } = "";
+        /// <summary>DLL resolved from the CLSID via InprocServer32, when found.</summary>
+        public string DllPath { get; set; } = "";
+        /// <summary>Scheduled tasks whose ComHandler ClassId matches this instance's CLSID.</summary>
+        public string TaskNames { get; set; } = "";
+        /// <summary>Live remote connections currently owned by this PID.</summary>
+        public int ConnectionCount { get; set; }
+        public string CommandLine { get; set; } = "";
+        public int ModuleCount { get; set; }
+        public string Display => $"PID {PID} · {Handler}";
+        public string TrafficFlag => ConnectionCount > 0 ? $"🔌 {ConnectionCount} conn" : "no traffic";
+    }
 }
 
